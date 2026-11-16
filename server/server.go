@@ -56,6 +56,12 @@ type Server struct {
 	loginLimit     *loginLimiter  // per-IP attempt limit on POST /api/auth/login
 	trustedProxies []netip.Prefix // ARTEX_TRUSTED_PROXIES; see clientIP
 
+	// basicAuth is the optional HTTP Basic Auth gate in front of the whole app
+	// (ported from ARTEX-CN). Disabled unless the operator turns it on.
+	basicAuth basicAuthGate
+	// scheduleMu serializes calendar-schedule ticks against run-now requests.
+	scheduleMu sync.Mutex
+
 	// concMu serializes concurrency-cap decisions (admission + reconcile) so a
 	// scheduler tick and an HTTP settings change / task creation can't both count
 	// free slots off the same snapshot and over-promote past the limit.
@@ -144,7 +150,8 @@ type triggeredRun struct {
 	agentKey  string
 	title     string
 	message   string // event body (trigger phrase + tool/args/results etc.); no task description/goal header
-	taskID    int64  // source task for finding/goal triggers; 0 for interval/none
+	taskID         int64 // source task for finding/goal triggers; 0 for interval/none
+	conversationID int64 // pre-created conversation (manual finding review); never coalesced
 	taskDesc  string // task description (task-level, same across one task); rendered once when merged
 	taskGoal  string // task goal (task-level, same across one task); rendered once when merged
 	mergeable bool   // true for finding/goal event triggers (merge by taskID)
@@ -170,6 +177,11 @@ func New(ctx context.Context, m *Manager, skillDir string, dataDir string, keyDi
 	}
 	s.initSetupToken()
 	s.initSideQuestions()
+	if m.pg != nil {
+		if err := s.basicAuth.load(m.pg); err != nil {
+			log.Fatalf("[auth] load HTTP Basic Auth: %v", err)
+		}
+	}
 	// Circuit-breaker thresholds/cooldowns are hot parameters on the failure path; push the global retry policy to the Registry once at startup,
 	// and again on every policy save (saveLLMRetryPolicy).
 	s.applyRetryPolicy()
@@ -688,6 +700,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/auth/init", s.authInit)
 	mux.HandleFunc("POST /api/auth/login", s.authLogin)
 	mux.HandleFunc("POST /api/auth/change-password", s.authChangePassword)
+	// Optional HTTP Basic Auth gate (ported from ARTEX-CN). The check endpoint is
+	// exempt from JWT so the gate can redirect before login.
+	mux.HandleFunc("GET /api/basic-auth/check", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("GET /api/settings/basic-auth", s.getBasicAuthSettings)
+	mux.HandleFunc("PUT /api/settings/basic-auth", s.saveBasicAuthSettings)
 
 	mux.HandleFunc("GET /api/health", s.health)
 	mux.HandleFunc("GET /api/stats", s.stats)
@@ -789,6 +809,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/exploration/frontier", s.frontier)
 	mux.HandleFunc("GET /api/exploration/findings", s.findings)
 	mux.HandleFunc("GET /api/exploration/findings/groups", s.findingGroups)
+	// Finding cases: historical duplicate-report consolidation (ported from ARTEX-CN).
+	mux.HandleFunc("GET /api/exploration/finding-cases", s.listFindingCases)
+	mux.HandleFunc("POST /api/exploration/finding-cases", s.mergeFindingCase)
+	mux.HandleFunc("GET /api/exploration/finding-cases/{id}", s.getFindingCase)
+	mux.HandleFunc("GET /api/exploration/finding-cases/{id}/members", s.getFindingCaseMembers)
+	mux.HandleFunc("DELETE /api/exploration/finding-cases/{id}/members/{fid}", s.removeFindingCaseMember)
+	mux.HandleFunc("PUT /api/exploration/finding-cases/{id}/report", s.updateCaseReport)
+	mux.HandleFunc("GET /api/exploration/finding-case-suggestions", s.caseSuggestions)
+	mux.HandleFunc("POST /api/exploration/finding-case-suggestions/{id}", s.resolveCaseSuggestion)
+	mux.HandleFunc("POST /api/exploration/finding-case-review", s.reviewFindingCases)
+	mux.HandleFunc("GET /api/exploration/finding-case-review", s.caseReviewRuns)
 	mux.HandleFunc("GET /api/exploration/findings/asset-tree", s.findingAssetTree)
 	mux.HandleFunc("GET /api/exploration/findings/stats", s.findingStats)
 	mux.HandleFunc("GET /api/exploration/findings/export", s.findingsExport)
@@ -976,14 +1007,26 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/intercept/judge", s.interceptSetJudgeConfig)
 	mux.HandleFunc("GET /api/intercept/judge/usage", s.interceptJudgeUsage) // cumulative token usage of fallback approval
 
+	// Calendar schedules: persisted time windows that start task runs
+	// (ported from ARTEX-CN).
+	mux.HandleFunc("GET /api/schedules", s.listSchedules)
+	mux.HandleFunc("POST /api/schedules", s.createSchedule)
+	mux.HandleFunc("GET /api/schedules/{id}", s.getSchedule)
+	mux.HandleFunc("PATCH /api/schedules/{id}", s.updateSchedule)
+	mux.HandleFunc("DELETE /api/schedules/{id}", s.deleteSchedule)
+	mux.HandleFunc("POST /api/schedules/{id}/pause", s.pauseSchedule)
+	mux.HandleFunc("POST /api/schedules/{id}/resume", s.resumeSchedule)
+	mux.HandleFunc("POST /api/schedules/{id}/run-now", s.runScheduleNow)
+
 	// /api/* goes through CORS + JWT; everything else is served by the embedded
 	// frontend (public — auth is enforced client-side and on the API). With the
 	// no-embed build the webui handler just 404s (run `next dev` separately).
+	// The optional Basic Auth gate wraps both (ported from ARTEX-CN).
 	api := cors(s.requireAuth(mux))
 	root := http.NewServeMux()
 	root.Handle("/api/", api)
 	root.Handle("/", s.webuiHandler())
-	return root
+	return s.requireBasicAuth(root)
 }
 
 // --- handlers ---
@@ -1626,6 +1669,9 @@ type createTaskReq struct {
 	// Credentials: test accounts declared at creation (#3). An empty password means
 	// "agent generates": the agent registers that account and records it back.
 	Credentials []taskCredentialReq `json:"credentials,omitempty"`
+	// Schedule, when present, creates a calendar schedule bound to this task in the
+	// same transaction (ported from ARTEX-CN).
+	Schedule *scheduleRequest `json:"schedule,omitempty"`
 }
 
 type taskCredentialReq struct {
@@ -1688,7 +1734,18 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid task-level intercept rules: "+err.Error())
 		return
 	}
+	var schedule *db.TaskScheduleInput
+	if req.Schedule != nil {
+		input := s.scheduleInput(*req.Schedule, nil)
+		input.TaskIDs = nil
+		if err := db.ValidateTaskScheduleInput(input); err != nil {
+			writeErr(w, 400, err.Error())
+			return
+		}
+		schedule = &input
+	}
 	t, err := s.m.CreateTaskWithOptions(req.Description, req.Goal, db.TaskCreateOptions{
+		Schedule: schedule,
 		Name: strings.TrimSpace(req.Name), CategoryID: req.CategoryID,
 		SourceTaskIDs: sourceIDs, CompanyIDs: req.CompanyIDs, LLMProfileIDs: req.LLMProfileIDs,
 		TimeoutSeconds: req.TimeoutSeconds, PlanHeartbeatSeconds: req.PlanHeartbeatSeconds, PlanQuietMode: req.PlanQuietMode,

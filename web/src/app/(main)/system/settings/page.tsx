@@ -15,6 +15,7 @@ import { api } from "@/lib/api";
 import { CHAT_SEND_MODE_OPTIONS, type ChatSendMode, setChatSendMode, useChatSendMode } from "@/lib/chat-send-mode";
 import type { Settings } from "@/lib/types";
 
+import { BasicAuthCard } from "./_components/basic-auth-card";
 import { NoiseProfileCard } from "./noise-profile-card";
 
 export default function SystemSettingsPage() {
@@ -267,6 +268,9 @@ export default function SystemSettingsPage() {
           balance-fill by content height. Card spacing uses mb rather than gap — in a multi-column layout
           column-gap only covers the gaps between columns; row spacing must come from the children. */}
       <div className="columns-1 gap-4 md:gap-6 lg:columns-2">
+        {/* Access control: the HTTP Basic Auth gate that sits in front of the ARTEX login. */}
+        <BasicAuthCard />
+
         <Card className="mb-4 break-inside-avoid md:mb-6">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">

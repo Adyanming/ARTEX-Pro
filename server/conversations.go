@@ -538,6 +538,37 @@ func (s *Server) runConversationTurn(ctx context.Context, cancel context.CancelC
 			}
 		}
 	}
+	// Historical finding review (ported from ARTEX-CN): the turn runs with the
+	// narrowed capability set, and on completion the submitted verdicts are
+	// validated before the review run is marked done.
+	if c.AgentKey == "reporter" {
+		manualReview, err := s.isHistoricalFindingReview(c.ID)
+		if err != nil {
+			finishReason = err.Error()
+			_, _ = s.m.pg.Exec(`UPDATE finding_case_review_runs SET state='failed',error=$2 WHERE conversation_id=$1`, c.ID, finishReason)
+			return
+		}
+		if manualReview {
+			ctx = agent.WithFindingCaseReview(ctx)
+		}
+		defer func() {
+			state := "done"
+			reason := ""
+			if finishStatus != "completed" || ctx.Err() != nil {
+				state = "failed"
+				reason = finishReason
+				if ctx.Err() != nil {
+					reason = "review stopped or service shut down"
+				}
+			}
+			if state == "done" && manualReview {
+				if err := s.validateFindingReviewCompletion(c.ID); err != nil {
+					state, reason = "failed", err.Error()
+				}
+			}
+			_, _ = s.m.pg.Exec(`UPDATE finding_case_review_runs SET state=$2,error=$3 WHERE conversation_id=$1 AND state='running'`, c.ID, state, reason)
+		}()
+	}
 	if ctx.Err() != nil {
 		return
 	}
@@ -681,7 +712,9 @@ func (s *Server) runAndPump(agentKey string, item triggeredRun) {
 // Caller holds queueMu.
 func (s *Server) nextTriggerRun(agentKey string, cfg triggerBehavior) triggeredRun {
 	q := s.triggerQ[agentKey]
-	if cfg.runMode == "parallel" || cfg.mergeMode == "none" {
+	// A run with a pre-created conversation (manual finding review) is never
+	// merged: it must run in exactly that conversation (ported from ARTEX-CN).
+	if q[0].conversationID > 0 || cfg.runMode == "parallel" || cfg.mergeMode == "none" {
 		s.triggerQ[agentKey] = q[1:]
 		return q[0]
 	}
@@ -698,7 +731,7 @@ func (s *Server) nextTriggerRun(agentKey string, cfg triggerBehavior) triggeredR
 	group := []triggeredRun{head}
 	rest := q[:0:0] // keep non-matching items in order
 	for _, it := range q[1:] {
-		if it.mergeable && it.taskID == head.taskID {
+		if it.conversationID == 0 && it.mergeable && it.taskID == head.taskID {
 			group = append(group, it)
 		} else {
 			rest = append(rest, it)
@@ -823,12 +856,27 @@ func mergeAllRuns(items []triggeredRun) triggeredRun {
 func (s *Server) runTriggeredRun(item triggeredRun) {
 	defer func() {
 		if r := recover(); r != nil {
+			if item.conversationID > 0 {
+				_, _ = s.m.pg.Exec(`UPDATE finding_case_review_runs SET state='failed',error=$2 WHERE conversation_id=$1`, item.conversationID, fmt.Sprint(r))
+			}
 			log.Printf("[trigger] run for %s panicked: %v", item.agentKey, r)
 		}
 	}()
 	pg := s.m.pg
-	c, err := pg.CreateConversationGated(item.agentKey, firstLine(item.title, 60), nil, item.targetGate)
-	if err != nil {
+	var c *db.Conversation
+	var err error
+	if item.conversationID > 0 {
+		// A manual finding review reserved this conversation up front: run in it
+		// rather than creating a new one (ported from ARTEX-CN).
+		c, err = pg.GetConversation(item.conversationID)
+		_, _ = pg.Exec(`UPDATE finding_case_review_runs SET state='running' WHERE conversation_id=$1`, item.conversationID)
+	} else {
+		c, err = pg.CreateConversationGated(item.agentKey, firstLine(item.title, 60), nil, item.targetGate)
+	}
+	if err != nil || c == nil {
+		if item.conversationID > 0 {
+			_, _ = pg.Exec(`UPDATE finding_case_review_runs SET state='failed',error='review conversation unavailable' WHERE conversation_id=$1`, item.conversationID)
+		}
 		log.Printf("[trigger] create conversation for %s failed: %v", item.agentKey, err)
 		return
 	}

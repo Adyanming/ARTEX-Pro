@@ -18,6 +18,7 @@ import (
 // from history on a resumed session (design doc C2).
 type DeferredInfo struct {
 	FindingGuidance string            // derived from the final permitted tools, including DB overrides
+	CaseGuidance    string            // finding-case consolidation guidance; independent of optional traffic binding
 	Deferred        []string          // all MCP tool names (schema withheld)
 	GlobalNames     []string          // MCP names to list in the system-prompt block
 	Unlock          *actool.UnlockSet // shared call-gate; nil when no MCP tools
@@ -83,9 +84,20 @@ func AugmentTools(ctx context.Context, agentKey string, base []actool.CoreTool) 
 	if resolve := ToolResolve(); resolve != nil {
 		out = resolve(ctx, agentKey, out)
 	}
+	// Historical consolidation gets a narrower capability set than new reporting.
+	if agentKey == "reporter" && isFindingCaseReview(ctx) {
+		out = historicalFindingCaseTools(out)
+	}
 	// Tool RAG (off by default): lexical projection of the bound list; only removes.
 	out = applyToolRAG(ctx, agentKey, out, def.Deferred, bm25Score)
 	out, def.FindingGuidance = findingWorkflowTools(agentKey, out)
+	// Finding-case consolidation guidance (ported from ARTEX-CN): only the
+	// reporter gets it, and only when the case tools are actually bound.
+	out, def.CaseGuidance = findingCaseWorkflow(agentKey, out)
+	if agentKey == "reporter" && isFindingCaseReview(ctx) {
+		def.FindingGuidance = ""
+		def.CaseGuidance += historicalFindingReviewGuidance
+	}
 	for i, t := range out {
 		out[i] = guardPanic(t)
 	}

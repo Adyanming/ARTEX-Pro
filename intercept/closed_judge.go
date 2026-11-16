@@ -146,6 +146,7 @@ func judgeClosed(ctx context.Context, cp Completer, profileID int64, policy, too
 		return Decision{ProfileID: profileID, ModelFallback: true, Action: "ask", Message: "ask invalid_output: " + err.Error()}, modelInput
 	}
 	action, reason := decideClosed(answers)
+	action, reason = guardIncompleteScripts(input, action, reason)
 	return Decision{ProfileID: profileID, Action: action, Message: reason, JudgeAnswers: answers}, modelInput
 }
 

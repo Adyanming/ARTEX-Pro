@@ -123,7 +123,7 @@ func (s *Server) applyTaskControlWithCause(t *Task, action string, pauseCause er
 			pauseCause = agent.AbortPausedByUser
 		}
 		s.engine.Pause(t.ID, pauseCause)
-		if err := s.m.ApplyTaskPause(t.ID); err != nil {
+		if err := s.m.ApplyTaskPauseOrigin(t.ID, pauseCause == agent.AbortPausedBySchedule); err != nil {
 			if !wasEnginePaused && !wasQueued {
 				s.engine.Resume(t)
 			}

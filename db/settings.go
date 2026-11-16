@@ -1,6 +1,9 @@
 package db
 
-import "database/sql"
+import (
+	"context"
+	"database/sql"
+)
 
 // Settings is a tiny key-value store for global app config the UI toggles at
 // runtime (e.g. traffic_capture). Missing keys fall back to caller defaults.
@@ -38,6 +41,19 @@ func (d *DB) SetSetting(key, value string) error {
 		return err
 	}
 	_, err = d.Exec(`
+INSERT INTO settings(key, value) VALUES ($1, $2)
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`, key, value)
+	return err
+}
+
+// SetSettingContext is SetSetting with a bound context, for callers that must
+// cap the write (the HTTP Basic Auth gate). Ported from ARTEX-CN.
+func (d *DB) SetSettingContext(ctx context.Context, key, value string) error {
+	value, err := sealSetting(key, value)
+	if err != nil {
+		return err
+	}
+	_, err = d.ExecContext(ctx, `
 INSERT INTO settings(key, value) VALUES ($1, $2)
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`, key, value)
 	return err

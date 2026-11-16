@@ -31,6 +31,8 @@ var (
 		"The user paused the task via the task control API (POST /api/tasks/{id}/control, action=pause). This Planner/Worker run was actively cancelled; running intents return to frontier(open) and are re-claimed and executed from scratch after the task resumes")
 	AbortPausedByOrchestrator = cause("paused_by_orchestrator", "The orchestrating agent paused the task",
 		"The orchestrating agent called the pause_task tool to pause this task. This Planner/Worker run was actively cancelled; running intents return to frontier(open) and are executed again after resuming")
+	AbortPausedBySchedule = cause("paused_by_schedule", "The schedule window closed",
+		"The task was paused because its calendar schedule window ended; it resumes in the next window. Running intents return to frontier(open) and are executed again after resuming")
 	AbortTaskDeleted = cause("task_deleted", "The task was deleted",
 		"The task is being deleted (DELETE /api/tasks/{id}); the deletion barrier has cancelled the task's running Planner, Worker, and main agent; this run's results will not be used")
 	AbortPausedOnReload = cause("paused_on_reload", "Restored the paused state on startup",

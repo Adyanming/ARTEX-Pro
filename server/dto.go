@@ -329,6 +329,8 @@ type FindingDTO struct {
 
 	ID        string `json:"id"`
 	FindingID string `json:"finding_id,omitempty"` // standalone findings-table id — the handle for status updates
+	CaseID    string `json:"case_id,omitempty"`    // unified finding-case id for consolidated exports (ported from ARTEX-CN)
+	MemberIDs []int64 `json:"member_ids,omitempty"` // original report ids folded into that case
 	VulnClass string `json:"vulnclass"`
 	Name      string `json:"name,omitempty"` // vulnerability name; the frontend falls back to displaying vulnclass when empty
 	Severity  string `json:"severity"`       // critical | high | medium | low
@@ -476,6 +478,14 @@ func findingFromDB(f *db.DBFinding, assets map[int64]*db.Asset) FindingDTO {
 		Evidence:  f.Evidence,
 		Report:    f.Report,
 		TS:        rfc3339(f.CreatedAt),
+	}
+	// A consolidated finding-case export is identified as case:<id>, never as a
+	// live finding handle (ported from ARTEX-CN).
+	if f.ExportCaseID > 0 {
+		d.ID = "case:" + i64s(f.ExportCaseID)
+		d.FindingID = ""
+		d.CaseID = i64s(f.ExportCaseID)
+		d.MemberIDs = f.ExportMemberIDs
 	}
 	d.Assets = findingAssetDTOs(f.AssetIDs, assets)
 	if f.TaskID != nil {

@@ -19,6 +19,8 @@ type DBFinding struct {
 	EvidenceVersion       int64
 	ReportEvidenceVersion int64
 	TrafficBindings       []FindingTrafficBinding // populated only for export
+	ExportCaseID          int64                   // transient unified-export identity, never a finding handle
+	ExportMemberIDs       []int64
 
 	ID                 int64
 	TaskID             *int64

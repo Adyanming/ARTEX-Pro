@@ -171,6 +171,9 @@ type TaskCreateOptions struct {
 	CoverageEnabled *bool
 	// InterceptRules are task-level asset interception rules, written into task_intercept_rules in the same transaction as the task at creation.
 	InterceptRules []TaskInterceptRuleInput
+	// Schedule, when set, creates a calendar schedule bound to this task in the same
+	// transaction and parks the task until its first window opens (ported from ARTEX-CN).
+	Schedule *TaskScheduleInput
 	// LLMRotate enables per-intent round-robin rotation of the task's LLM chain
 	// heads (#85): each claimed worker intent runs on the next profile in the
 	// chain instead of the single active head. nil = off (default), preserving
@@ -279,6 +282,25 @@ RETURNING id, status, paused, created_at`, opts.Name, opts.CategoryID, descripti
 		t.LLMFailoverState = "default"
 	} else {
 		t.LLMFailoverState = "ready"
+	}
+	if opts.Schedule != nil {
+		in, err := normalizeScheduleInput(*opts.Schedule)
+		if err != nil {
+			return nil, err
+		}
+		in.TaskIDs = []int64{t.ID}
+		if _, err = insertTaskSchedule(tx, in); err != nil {
+			return nil, err
+		}
+		// A scheduled task starts parked; the scheduler opens it in its first window
+		// and a scheduled pause is never treated as a manual one.
+		if !in.StartImmediately {
+			if _, err = tx.Exec(`UPDATE tasks SET paused=true,schedule_paused=true,queue_mode='bootstrap' WHERE id=$1`, t.ID); err != nil {
+				return nil, err
+			}
+			t.Paused = true
+			t.QueueMode = "bootstrap"
+		}
 	}
 	return t, tx.Commit()
 }

@@ -606,6 +606,9 @@ func judgeWith(ctx context.Context, cfg JudgeConfig, rv Reviewer, cp Completer, 
 	default:
 		out = Decision{ProfileID: out.ProfileID, ModelFallback: true, Action: cfg.FailAction, Message: "model output unparsable, applying failure policy"}
 	}
+	if !closed {
+		out.Action, out.Message = guardIncompleteScripts(input, out.Action, out.Message)
+	}
 	// A model verdict never carries a rule; keep RuleID 0 (→ NULL) for history.
 	out.RuleID = 0
 	if len(modelInput) > 0 {

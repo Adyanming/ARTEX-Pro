@@ -997,6 +997,9 @@ export default function FindingsPage() {
             {selectedIds.size > 0 && (
               <span className="text-xs text-muted-foreground tabular-nums">{selectedIds.size} selected</span>
             )}
+            <Button size="sm" variant="outline" asChild>
+              <Link href="/function/findings/cases">Merged cases</Link>
+            </Button>
             <Button size="sm" variant="outline" onClick={openExport}>
               <DownloadIcon /> Export
             </Button>

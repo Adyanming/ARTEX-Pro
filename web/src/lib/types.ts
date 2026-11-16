@@ -466,6 +466,42 @@ export interface TaskConstraint {
   ts?: string;
 }
 
+// ---- Schedules (recurring task windows) ----
+// TaskSchedule is one scheduled window: either a single date ("once") or weekday
+// recurrence ("weekly"), each window wrapping a start/end clock time. The backend
+// derives status/next_start/next_end; history is the per-schedule run log.
+export interface TaskSchedule {
+  id: number;
+  name: string;
+  enabled: boolean;
+  timezone_mode: "beijing" | "system";
+  timezone?: string;
+  schedule_type: "once" | "weekly";
+  run_date?: string;
+  end_date?: string;
+  weekdays: number[];
+  start_time: string;
+  end_time?: string;
+  start_immediately: boolean;
+  status: "waiting" | "running" | "outside" | "completed" | "error" | "paused";
+  last_window_key?: string;
+  last_transition_at?: string;
+  last_error?: string;
+  next_start?: string;
+  next_end?: string;
+  run_count?: number;
+  last_run_at?: string;
+  task_ids: number[];
+  history?: Array<{
+    id: number;
+    task_id?: number;
+    action: string;
+    success: boolean;
+    message: string;
+    created_at: string;
+  }>;
+}
+
 // ---- Findings ----
 export type Severity = "critical" | "high" | "medium" | "low";
 
@@ -591,6 +627,83 @@ export interface FindingQuery {
   sort?: "severity" | "time";
   // asset tree node key; selecting a node selects its whole subtree. Empty = no asset filter.
   assetScope?: string;
+}
+
+// ---- Finding cases (merge / consolidation groups) ----
+// A finding case folds several findings that describe the same issue into one report.
+export interface FindingDistinctStats {
+  total: number;
+  reports: number;
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  unassessed: number;
+}
+export interface FindingCase {
+  id: string;
+  task_id: string | null;
+  title: string;
+  reason: string;
+  severity: Severity | "";
+  severity_reason: string;
+  report?: string;
+  version: number;
+  report_version: number;
+  active: boolean;
+  count: number;
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  created_at: string;
+}
+// FindingCaseListRow is one row of the case list: the merged case (case) plus the
+// representative finding and the merged finding ids (matched_ids).
+export interface FindingCaseListRow {
+  task_name?: string;
+  task_description?: string;
+  assets?: FindingAsset[];
+  asset_count?: number;
+  last_found_at?: string;
+  case?: FindingCase | null;
+  finding?: Finding;
+  matched_ids: number[];
+}
+export interface FindingCasePage {
+  matching_reports?: number;
+  items: FindingCaseListRow[];
+  total: number;
+  page: number;
+  page_size: number;
+  stats: FindingDistinctStats;
+}
+export interface FindingCaseEvent {
+  id: string;
+  action: string;
+  actor: string;
+  reason: string;
+  finding_ids: number[];
+  created_at: string;
+}
+export interface FindingCaseDetail {
+  case: FindingCase;
+  events: FindingCaseEvent[];
+}
+export interface FindingCaseSuggestion {
+  id: string;
+  task_id: string;
+  left_id: string;
+  right_id: string;
+  title: string;
+  reason: string;
+  state: string;
+}
+export interface FindingCaseReviewRun {
+  conversation_id: number;
+  task_id: string;
+  state: "queued" | "running" | "done" | "failed";
+  error: string;
 }
 
 // ---- Findings by asset (asset view) ----

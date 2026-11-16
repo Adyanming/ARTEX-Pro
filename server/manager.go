@@ -1329,7 +1329,12 @@ func (m *Manager) ApplyTaskAdmission(id, expectedStatus, status string, queued b
 // while the task is parked (#1). queue_mode is intentionally retained so resuming a never-run
 // bootstrap task still performs goal decomposition, but the next enqueue receives
 // a new queued_at timestamp and therefore moves to the FIFO tail.
-func (m *Manager) ApplyTaskPause(id string) error {
+func (m *Manager) ApplyTaskPause(id string) error { return m.ApplyTaskPauseOrigin(id, false) }
+
+// ApplyTaskPauseOrigin records who owns the pause: a scheduled pause may be
+// lifted automatically by the calendar scheduler, a manual one never is
+// (ported from ARTEX-CN).
+func (m *Manager) ApplyTaskPauseOrigin(id string, scheduled bool) error {
 	m.taskStateMu.Lock()
 	defer m.taskStateMu.Unlock()
 	n, err := strconv.ParseInt(id, 10, 64)
@@ -1338,10 +1343,10 @@ func (m *Manager) ApplyTaskPause(id string) error {
 	}
 	var mode string
 	err = m.pg.QueryRow(`UPDATE tasks
-		SET paused=true, queued=false, queued_at=NULL, paused_at=now()
+		SET paused=true, queued=false, queued_at=NULL, paused_at=now(), schedule_paused=$2
 		WHERE id=$1 AND deleted_at IS NULL AND paused=false
 		  AND status NOT IN ('done','failed','timeout')
-		RETURNING COALESCE(queue_mode,'')`, n).Scan(&mode)
+		RETURNING COALESCE(queue_mode,'')`, n, scheduled).Scan(&mode)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("task %s is unavailable for pause", id)
 	}

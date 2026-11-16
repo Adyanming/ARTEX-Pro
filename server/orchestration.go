@@ -66,7 +66,7 @@ func (s *Server) hostTools() ([]actool.CoreTool, map[string][]string) {
 // orchestrationTools returns the cross-task tool set. Bound per-agent via the
 // tools table (default: no binding — opt-in for orchestration agents).
 func (s *Server) orchestrationTools() []actool.CoreTool {
-	return []actool.CoreTool{
+	return append([]actool.CoreTool{
 		s.toolListTasks(),
 		s.toolListLLMProfiles(),
 		s.toolSpawnTask(),
@@ -81,7 +81,7 @@ func (s *Server) orchestrationTools() []actool.CoreTool {
 		s.toolUpdateFindingReport(),
 		s.toolGetFindingTraffic(),
 		s.toolBindFindingTraffic(),
-	}
+	}, s.findingCaseTools()...)
 }
 
 // --- schema helpers ---
@@ -569,6 +569,7 @@ func (s *Server) seedOrchestrationTools() {
 	s.upgradeReporterTriggerMessage() // backfill migration for old DBs: makes the reporter send evidence_version back (one-time)
 	s.seedFindingTrafficTools()       // adds optional evidence params and read-only evidence tools, preserving user config
 	s.seedFindingWorkflowTools()
+	s.seedFindingCaseTools() // finding-case consolidation tools (ported from ARTEX-CN)
 	s.seedFindingVerificationSchema() // S1: poe_level / evidence_quotes on update_finding_report, added once per DB
 	s.seedFindingEvidenceSchema()     // optional counterevidence / confidence_rationale on report_finding, added once per DB
 	s.seedFactSourceSchema()          // source enum on record_fact, added once per DB

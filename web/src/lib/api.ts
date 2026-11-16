@@ -39,6 +39,10 @@ import type {
   ExplorationNodeQuery,
   Finding,
   FindingAssetTree,
+  FindingCaseDetail,
+  FindingCasePage,
+  FindingCaseReviewRun,
+  FindingCaseSuggestion,
   FindingDeepenResponse,
   FindingGroupsPage,
   FindingQuery,
@@ -91,6 +95,7 @@ import type {
   TaskGoal,
   TaskLLMResolutions,
   TaskNode,
+  TaskSchedule,
   TaskScopeRow,
   TaskTemplate,
   TokenTotal,
@@ -236,6 +241,38 @@ function interceptPageQuery(page: number, size: number, filter: InterceptApprova
   return query.toString();
 }
 
+// ScheduleInput is the form shape of a scheduled task window; schedulePayload flattens
+// it into the JSON body both create/update expect (omitted fields get server defaults).
+export type ScheduleInput = {
+  name: string;
+  enabled?: boolean;
+  timezone_mode?: "beijing" | "system";
+  schedule_type: "once" | "weekly";
+  run_date?: string;
+  end_date?: string;
+  weekdays?: number[];
+  start_time: string;
+  end_time?: string;
+  start_immediately?: boolean;
+  task_ids: number[];
+};
+
+function schedulePayload(input: ScheduleInput) {
+  return {
+    name: input.name,
+    enabled: input.enabled ?? true,
+    timezone_mode: input.timezone_mode ?? "beijing",
+    schedule_type: input.schedule_type,
+    run_date: input.run_date ?? "",
+    end_date: input.end_date ?? "",
+    weekdays: input.weekdays ?? [],
+    start_time: input.start_time,
+    end_time: input.end_time ?? "",
+    start_immediately: input.start_immediately ?? false,
+    task_ids: input.task_ids,
+  };
+}
+
 export const api = {
   // Backend application version (injected via ldflags at release, default "dev").
   health: () => get<{ ok: boolean; service: string; version: string; latest_version?: string }>("/health"),
@@ -282,6 +319,17 @@ export const api = {
       intercept_rules: input.interceptRules ?? [], // task-level asset interception rules
       credentials: input.credentials ?? [], // test accounts declared at creation; an empty password = the agent generates and records it (#3)
     }),
+  // ---- schedules (recurring task windows) ----
+  schedules: () => get<{ schedules: TaskSchedule[] }>("/schedules").then((r) => arr(r.schedules)),
+  schedule: (id: number) => get<TaskSchedule>(`/schedules/${id}`),
+  createSchedule: (input: ScheduleInput) => post<TaskSchedule>("/schedules", schedulePayload(input)),
+  updateSchedule: (id: number, input: ScheduleInput) =>
+    patch<TaskSchedule>(`/schedules/${id}`, schedulePayload(input)),
+  deleteSchedule: (id: number) => del<{ ok: boolean }>(`/schedules/${id}`),
+  pauseSchedule: (id: number) => post<{ ok: boolean }>(`/schedules/${id}/pause`, {}),
+  resumeSchedule: (id: number) => post<{ ok: boolean }>(`/schedules/${id}/resume`, {}),
+  runScheduleNow: (id: number) =>
+    post<{ ok: boolean; started: number; errors?: string[] }>(`/schedules/${id}/run-now`, {}),
   taskCategories: () => get<{ categories: TaskCategory[] }>("/task-categories").then((r) => arr(r.categories)),
   updateTask: (id: string, input: { name?: string; pinned?: boolean }) => patch<Task>(`/tasks/${id}`, input),
   renameTask: (id: string, name: string) => patch<Task>(`/tasks/${id}`, { name }),
@@ -569,6 +617,45 @@ export const api = {
   // findings and their ancestors, nodes carrying subtree aggregate counts. Not paginated — the tree is a navigation structure, fetched in one go.
   findingAssetTree: (q: Omit<FindingQuery, "page" | "pageSize">) =>
     get<FindingAssetTree>(`/exploration/findings/asset-tree?${findingFilterParams(q).toString()}`),
+  // ---- finding cases (merge / consolidation groups) ----
+  // findingCases pages the consolidated "case" rows (several findings merged into one report).
+  // originalRows=1 keeps the raw findings instead of folding them into their case.
+  findingCases: (q: FindingQuery, originalRows = false) => {
+    const p = findingFilterParams(q);
+    p.set("page", String(q.page));
+    p.set("limit", String(q.pageSize));
+    if (originalRows) p.set("original_rows", "1");
+    return get<FindingCasePage>(`/exploration/finding-cases?${p}`);
+  },
+  getFindingCase: (id: string, contextTask?: string) =>
+    get<FindingCaseDetail>(
+      `/exploration/finding-cases/${id}${contextTask ? `?context_task=${encodeURIComponent(contextTask)}` : ""}`,
+    ),
+  findingCaseMembers: (id: string, page = 1, contextTask?: string) =>
+    get<FindingsPage>(
+      `/exploration/finding-cases/${id}/members?page=${page}&limit=20${contextTask ? `&context_task=${encodeURIComponent(contextTask)}` : ""}`,
+    ),
+  removeFindingCaseMember: (id: string, fid: string, reason: string) =>
+    http<{ ok: boolean }>(`/exploration/finding-cases/${id}/members/${fid}`, {
+      method: "DELETE",
+      body: JSON.stringify({ reason }),
+    }),
+  findingCaseSuggestions: (task?: string) =>
+    get<FindingCaseSuggestion[]>(
+      `/exploration/finding-case-suggestions${task ? `?task_id=${encodeURIComponent(task)}` : ""}`,
+    ),
+  resolveFindingCaseSuggestion: (id: string, accept: boolean) =>
+    post<{ case_id: string }>(`/exploration/finding-case-suggestions/${id}`, { accept }),
+  reviewFindingCases: (ids: string[]) =>
+    post<{ runs: { conversation_id: number; task_id: string }[] }>("/exploration/finding-case-review", {
+      finding_ids: ids,
+    }),
+  regenerateFindingCase: (id: string, contextTask?: string) =>
+    post<{ runs: { conversation_id: number; task_id: string }[] }>(
+      `/exploration/finding-case-review${contextTask ? `?context_task=${encodeURIComponent(contextTask)}` : ""}`,
+      { case_id: id },
+    ),
+  findingCaseReviewRuns: () => get<FindingCaseReviewRun[]>("/exploration/finding-case-review"),
   findingStats: () => get<FindingStats>("/exploration/findings/stats"),
   // exportFindings triggers the findings page export and downloads the file. scope=selected
   // sends ids (a finding_id list); scope=filtered sends the current filters (the FindingQuery filter fields); scope=all ignores filters.
@@ -841,6 +928,10 @@ export const api = {
   // ---- app settings (runtime toggles) ----
   settings: () => get<Settings>(`/settings`),
   setSettings: (patch: Partial<Settings>) => put<Settings>(`/settings`, patch),
+  // HTTP Basic Auth in front of the app (independent of the ARTEX login account).
+  basicAuthSettings: () => get<{ enabled: boolean; username: string; password_set: boolean }>("/settings/basic-auth"),
+  setBasicAuthSettings: (settings: { enabled: boolean; username: string; password: string }) =>
+    put<{ enabled: boolean; username: string; password_set: boolean }>("/settings/basic-auth", settings),
   noiseStatus: () => get<import("@/lib/types").NoiseStatus>(`/settings/noise`),
   // Run a real "test" search with the given (or saved) config to verify it works.
   testWebSearch: (patch: {

@@ -39,6 +39,23 @@ justify it, and every autonomous action passes through scope rules, approval gat
 - **Self-hosted and model-agnostic.** One Go binary with the Next.js UI embedded, PostgreSQL,
   your own Anthropic/OpenAI-compatible endpoint, or a local Ollama.
 
+### ARTEX-Pro: this fork
+
+This repository is **ARTEX-Pro**: the English engineering baseline (this upstream) with four
+business modules ported from the Chinese fork [RuoJi6/ARTEX](https://github.com/RuoJi6/ARTEX)
+(v0.3.18), minus its self-updater:
+
+- **Calendar schedules** — weekly/one-off time windows that pause and resume tasks automatically.
+- **Finding cases** — consolidate repeated reports of one real defect into a unified report while
+  keeping every original report and its evidence.
+- **HTTP Basic Auth gate** — an optional whole-app access gate.
+- **Approval script review** — the referenced script's full snapshot (path, SHA-256, size, source)
+  is handed to the review model; an incomplete snapshot always escalates to a human.
+
+The ported modules keep their original Chinese UI; the rest of the UI stays English. What was
+ported, how it was wired into this baseline, and the known gaps are documented in
+[docs/PORTING-ARTEX-CN.md](docs/PORTING-ARTEX-CN.md).
+
 ---
 
 ## Quick start
