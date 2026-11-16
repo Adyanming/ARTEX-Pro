@@ -55,3 +55,5 @@ Go 侧（编译与 vet 通过）：
 - `go test ./intercept -run 'Review|Script|Closed'` ✅
 - `go test ./agent -run 'Finding|Deferred'` ✅
 - `go build -o build/artex.exe ./cmd/artex` ✅（44.5 MB）
+- `pnpm build`（web/）✅：新增路由 `/function/schedules`、`/function/findings/case`、`/function/findings/cases` 均静态产出
+- `go test ./...` 未跑：db/server 的测试需要 PostgreSQL（本机无 Docker），上线前请在 CI 或 `docker compose up` 环境执行
